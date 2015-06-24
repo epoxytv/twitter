@@ -205,6 +205,11 @@ module Twitter
         object_from_response(Twitter::Tweet, :post, "/1.1/statuses/update_with_media.json", options.merge('media[]' => media, 'status' => status))
       end
 
+      def update_with_video(status, video, options = {})
+        media_id = upload_video(video)
+        object_from_response(Twitter::Tweet, :post, "/1.1/statuses/update.json", options.merge('media_ids' => media_id, 'status' => status))
+      end
+
       # Returns oEmbed for a Tweet
       #
       # @see https://dev.twitter.com/docs/api/1.1/get/statuses/oembed
@@ -297,6 +302,38 @@ module Twitter
         retweeted_status[:body] = response[:body].delete(:retweeted_status)
         retweeted_status[:body][:retweeted_status] = response[:body]
         Twitter::Tweet.from_response(retweeted_status)
+      end
+
+      def upload_video(video)
+        media_type = 'video/mp4'
+        video_size = File.size(video)
+        split_location  = "/data/epoxy/videos/preview/"
+        raise "preview video too large for video: #{video}" if video_size > 5242880*3
+
+        #init = Twitter::REST::Request.new(self, :post, 'https://upload.twitter.com/1.1/media/upload.json', command:"INIT", media_type: media_type, total_bytes: video_size).perform
+        init = post('/1.1/media/upload.json', command:"INIT", media_type: media_type, total_bytes: video_size)
+        media_id = JSON.parse(init[:body])["media_id"]
+        Rails.logger.warn "MEDIA_ID: #{media_id}"
+        raise "NO MEDIA ID" if media_id.nil?
+        Rails.logger.warn "split -b 5m -a 1 #{video} #{split_location}#{media_id.to_s}/"
+        dir = "#{split_location}#{media_id.to_s}/"
+        FileUtils.mkpath(dir)
+        `split -b 5m -a 1 #{video} #{dir}`
+        ['a','b','c'].each_with_index do |suffix, n|
+          part = dir+suffix
+          break unless File.exists?(part)
+          upload_status = multipart_post('/1.1/media/upload.json', command:"APPEND", media_id: media_id, segment_index: n, file: part)
+          Rails.logger.warn "upload_status: #{upload_status.inspect}"
+        end
+        finalize = post('/1.1/media/upload.json', command:"FINALIZE", media_id: media_id)
+        status = JSON.parse(finalize[:body])
+        Rails.logger.warn "FINIALIZE!!!! #{finalize.inspect} -- status #{status}!! FINISHED!!"
+        if finalize.present?
+          FileUtils.remove_dir(dir)
+          return media_id
+        else
+          raise "ERROR uploading video with media_id: #{media_id} and video: #{video}"
+        end
       end
 
     end

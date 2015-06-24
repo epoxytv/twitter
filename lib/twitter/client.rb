@@ -69,7 +69,15 @@ module Twitter
     # Perform an HTTP POST request
     def post(path, params={})
       signature_params = params.values.any?{|value| value.respond_to?(:to_io)} ? {} : params
+      Rails.logger.warn "POSTING!! path: #{path}, params: #{params}"
       request(:post, path, params, signature_params)
+    end
+
+    def multipart_post(path, params={})
+      file = params.delete(:file)
+      signature_params = params.values.any?{|value| value.respond_to?(:to_io)} ? {} : params
+      Rails.logger.warn "MULTIPART-POSTING!! path: #{path}, params: #{params}"
+      request(:multipart_post, path, params, signature_params, file)
     end
 
     # Perform an HTTP PUT request
@@ -97,15 +105,36 @@ module Twitter
             Twitter.client.bearer_token = @bearer_token if Twitter.client?
           end
           request.headers[:authorization] = bearer_auth_header
+        elsif method == :multipart_post
+          request.headers[:authorization] = oauth_auth_header(method, path, signature_params).to_s
+          request.headers[:accept] = '*/*' # It is important we set this, otherwise we get an error.
+          request.headers[:connection] = "Close"
+          request.headers[:user_agent] = "OAuth gem v0.4.7"
         else
           request.headers[:authorization] = oauth_auth_header(method, path, signature_params).to_s
+          request.headers[:content_type] = 'application/x-www-form-urlencoded;' 
+          request.headers[:accept] = '*/*' # It is important we set this, otherwise we get an error.
+          request.headers[:connection] = "Close"
+          request.headers[:user_agent] = "OAuth gem v0.4.7"
         end
       end
     end
 
-    def request(method, path, params={}, signature_params=params)
+    def request(method, path, params={}, signature_params=params, file=nil)
       request_setup = request_setup(method, path, params, signature_params)
-      connection.send(method.to_sym, path, params, &request_setup).env
+      if path=="/1.1/media/upload.json"
+        if method == :multipart_post
+          res = multipart_upload(params, file)
+          raise "twitter video multipart-upload error: #{res.code} -- #{res.msg}, params: #{params}" unless res.code == "204"
+          res
+        else
+          res = upload_connection.send(method.to_sym, path, params, &request_setup).env
+          raise "twitter video upload error: #{res[:response].status} -- #{res[:response].body}, params: #{params}" unless res[:response].status.in? [200,201,202]
+          res
+        end
+      else
+        connection.send(method.to_sym, path, params, &request_setup).env
+      end
     rescue Faraday::Error::ClientError
       raise Twitter::Error::ClientError
     rescue MultiJson::DecodeError
@@ -117,6 +146,51 @@ module Twitter
     # @return [Faraday::Connection]
     def connection
       @connection ||= Faraday.new(@endpoint, @connection_options.merge(:builder => @middleware))
+    end
+
+    def upload_connection
+      @upload_connection ||= Faraday.new('https://upload.twitter.com',@connection_options) do |faraday|
+        faraday.request  :url_encoded
+        faraday.adapter :net_http
+      end
+    end
+
+    def multipart_upload(params,filename)
+      boundary = "00Twurl" + rand(1000000000000000000).to_s + "lruwT99"
+      multipart_body = []
+      file_field = 'media'
+
+      params.each {|key, value|
+        multipart_body << "--#{boundary}\r\n"
+        multipart_body << "Content-Disposition: form-data; name=\"#{key}\"\r\n"
+        multipart_body << "\r\n"
+        multipart_body << value
+        multipart_body << "\r\n"
+      }
+
+      multipart_body << "--#{boundary}\r\n"
+      multipart_body << "Content-Disposition: form-data; name=\"#{file_field}\"; filename=\"#{File.basename(filename)}\"\r\n"
+      multipart_body << "Content-Type: application/octet-stream\r\n"
+      multipart_body << "\r\n"
+      multipart_body << File.read(filename)
+      multipart_body << "\r\n--#{boundary}--\r\n"
+
+      req = Net::HTTP::Post.new('/1.1/media/upload.json', {})
+      req.body = multipart_body.join
+      req.content_type = "multipart/form-data, boundary=\"#{boundary}\""
+
+      consumer =
+        OAuth::Consumer.new(
+          @consumer_key,
+          @consumer_secret,
+          :site => 'https://upload.twitter.com',
+          :proxy => nil
+        )
+      consumer.http.use_ssl = true
+      consumer.http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      access_token = OAuth::AccessToken.new(consumer, @oauth_token, @oauth_token_secret)
+      req.oauth!(consumer.http, consumer, access_token)
+      res = consumer.http.request(req)
     end
 
     # Generates authentication header for a bearer token request
@@ -140,7 +214,11 @@ module Twitter
     end
 
     def oauth_auth_header(method, path, params={})
-      uri = URI(@endpoint + path)
+      if path=="/1.1/media/upload.json"
+        uri = URI('https://upload.twitter.com' + path)
+      else
+        uri = URI(@endpoint + path)
+      end
       SimpleOAuth::Header.new(method, uri, params, credentials)
     end
   end
