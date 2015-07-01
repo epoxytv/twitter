@@ -201,8 +201,10 @@ module Twitter
       # @option options [Boolean, String, Integer] :trim_user Each tweet returned in a timeline will include a user object with only the author's numerical ID when set to true, 't' or 1.
       # @example Update the authenticating user's status
       #   Twitter.update_with_media("I'm tweeting with @gem!", File.new('my_awesome_pic.jpeg'))
+
       def update_with_media(status, media, options={})
-        object_from_response(Twitter::Tweet, :post, "/1.1/statuses/update_with_media.json", options.merge('media[]' => media, 'status' => status))
+        media_id = upload_media(media)
+        object_from_response(Twitter::Tweet, :post, "/1.1/statuses/update.json", options.merge('media_ids' => media_id, 'status' => status))
       end
 
       def update_with_video(status, video, options = {})
@@ -323,17 +325,20 @@ module Twitter
           part = dir+suffix
           break unless File.exists?(part)
           upload_status = multipart_post('/1.1/media/upload.json', command:"APPEND", media_id: media_id, segment_index: n, file: part)
-          Rails.logger.warn "upload_status: #{upload_status.inspect}"
         end
         finalize = post('/1.1/media/upload.json', command:"FINALIZE", media_id: media_id)
         status = JSON.parse(finalize[:body])
-        Rails.logger.warn "FINIALIZE!!!! #{finalize.inspect} -- status #{status}!! FINISHED!!"
         if finalize.present?
           FileUtils.remove_dir(dir)
           return media_id
         else
           raise "ERROR uploading video with media_id: #{media_id} and video: #{video}"
         end
+      end
+
+      def upload_media(media)
+        upload_status = multipart_post('/1.1/media/upload.json', file: media)
+        media_id = JSON.parse(upload_status.body)["media_id"]
       end
 
     end
