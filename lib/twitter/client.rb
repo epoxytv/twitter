@@ -125,11 +125,11 @@ module Twitter
       if path=="/1.1/media/upload.json"
         if method == :multipart_post
           res = multipart_upload(params, file)
-          raise Twitter::Error::ClientError.new("twitter video multipart-upload error: #{res.code} -- #{res.msg}, params: #{params}") unless res.code.in? ["204", "200"]
+          raise Twitter::Error::ClientError.new("twitter multipart-upload error: #{res.code} -- #{res.msg}, params: #{params}") unless res.code.in? ["204", "200"]
           res
         else
           res = upload_connection.send(method.to_sym, path, params, &request_setup).env
-          raise Twitter::Error::ClientError.new("twitter video upload error: #{res[:response].status} -- #{res[:response].body}, params: #{params}") unless res[:response].status.in? [200,201,202]
+          raise Twitter::Error::ClientError.new("twitter upload error: #{res[:response].status} -- #{res[:response].body}, params: #{params}") unless res[:response].status.in? [200,201,202]
           res
         end
       else

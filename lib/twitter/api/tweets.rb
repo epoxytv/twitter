@@ -311,20 +311,21 @@ module Twitter
         video_size = File.size(video)
         split_location  = "/data/epoxy/videos/preview/"
         raise "preview video too large for video: #{video}" if video_size > 5242880*3
-
+        Rails.logger.warn "total video size: #{video_size} for #{video}"
         #init = Twitter::REST::Request.new(self, :post, 'https://upload.twitter.com/1.1/media/upload.json', command:"INIT", media_type: media_type, total_bytes: video_size).perform
         init = post('/1.1/media/upload.json', command:"INIT", media_type: media_type, total_bytes: video_size)
         media_id = JSON.parse(init[:body])["media_id"]
-        Rails.logger.warn "MEDIA_ID: #{media_id}"
+        Rails.logger.warn "TWITTER MEDIA_ID: #{media_id} for #{video}"
         raise "NO MEDIA ID" if media_id.nil?
-        Rails.logger.warn "split -b 5m -a 1 #{video} #{split_location}#{media_id.to_s}/"
         dir = "#{split_location}#{media_id.to_s}/"
         FileUtils.mkpath(dir)
-        `split -b 5m -a 1 #{video} #{dir}`
+        output = `split -b 5m -a 1 #{video} #{dir} 2>&1`
+        Rails.logger.warn "split output: #{output}" if output
         ['a','b','c'].each_with_index do |suffix, n|
           part = dir+suffix
           break unless File.exists?(part)
           upload_status = multipart_post('/1.1/media/upload.json', command:"APPEND", media_id: media_id, segment_index: n, file: part)
+          Rails.logger.warn "uploading part #{suffix} -- size: #{File.size(part)}"
         end
         finalize = post('/1.1/media/upload.json', command:"FINALIZE", media_id: media_id)
         status = JSON.parse(finalize[:body])
